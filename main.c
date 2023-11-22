@@ -7,11 +7,7 @@
 #include <unistd.h>
 
 #include "jsmn/jsmn.h"
-
-#define URL "https://cdn.jsdelivr.net/gh/fawazahmed0/quran-api@1/editions/bos-wwwislamhouseco/"
-#define URL_SIZE strlen(URL)
-#define URL_END ".json"
-#define URL_END_SIZE strlen(URL_END)
+#include "config.h"
 
 typedef struct{
     size_t len;
@@ -23,7 +19,6 @@ typedef struct string{
     struct string *next;
 }Node;
 
-
 static size_t WriteCallback(void *data, size_t size, size_t nmemb, void *userp){
     size_t rsize = size * nmemb;
     buf *mem = (buf *) userp;
@@ -31,7 +26,7 @@ static size_t WriteCallback(void *data, size_t size, size_t nmemb, void *userp){
     char *ptr = realloc(mem->data, mem->len + rsize + 1);
     if(!ptr){
         perror("realloc");
-        return -1;
+        return 0;
     }
     mem->data = ptr;
     memcpy(&(mem->data[mem->len]), data, rsize);
@@ -60,14 +55,17 @@ char *getmsg(char *path){
         if (res != CURLE_OK){
             fprintf(stderr, "curl_easy_perform() failed: %s\n",
                     curl_easy_strerror(res));
+            curl_easy_cleanup(curl);
+            curl_global_cleanup();
+            free(mem.data);
             exit(EXIT_FAILURE);
         }
 
-        curl_easy_cleanup(curl);
+            curl_easy_cleanup(curl);
     }
 
     curl_global_cleanup();
-    return mem.data;
+    return (mem.data);
 }
 
 char *getpath(int r_num){
@@ -75,14 +73,16 @@ char *getpath(int r_num){
     int length = snprintf( NULL, 0, "%d", r_num );
     char* str = malloc( length + 1 );
     snprintf( str, length + 1, "%d", r_num );
-    char *urlP = malloc((URL_SIZE + length + URL_END_SIZE + 1) * sizeof(char));
+    int size = URL_SIZE + length + URL_END_SIZE + strlen(lang) + 1;
+    char *urlP = malloc(size * sizeof(char));
 
     if(urlP == NULL){
         perror("malloc");
         exit(EXIT_FAILURE);
     }
 
-    strcat(urlP, "https://cdn.jsdelivr.net/gh/fawazahmed0/quran-api@1/editions/bos-wwwislamhouseco/");
+    strcpy(urlP, URL);
+    strcat(urlP, lang);
     strcat(urlP, str);
     free(str);
     strcat(urlP, ".json");
@@ -97,15 +97,15 @@ static int jsoneq(const char *json, jsmntok_t *tok, const char *s) {
     return -1;
 }
 
-void free_list(Node *surah){
-    Node *current = surah;
+void free_list(Node **surah){
     Node *next;
-    while(current){
-        next = current->next;
-        free(current->verse);
-        free(current);
-        current = next;
+    while(*surah){
+        next = (*surah)->next;
+        free((*surah)->verse);
+        free((*surah));
+        (*surah) = next;
     }
+    *surah = NULL;
 }
 
 void print_surah(Node *surah){
@@ -118,26 +118,21 @@ void print_surah(Node *surah){
 void print_rand_ayat(Node *surah, size_t ssize){
     srand(time(0));
     ssize--;
-    size_t ind = 1;
+    int ind = 1;
     int r_ayat = rand() % ssize + 1;
     while(surah){
         if(ind == r_ayat) break;
         surah = surah->next;
         ind++;
     }
-    printf("ayat: %zu\n", ind);
+    printf("ayat: %d\n", ind);
     puts(surah->verse);
 }
 
 Node *parse_json(char *json, uint16_t *surah_size){
     jsmn_parser parser;
     jsmn_init(&parser);
-    jsmntok_t *tokens = malloc(sizeof(jsmntok_t) * 2048);
-
-    if(tokens == NULL){
-        perror("malloc");
-        exit(EXIT_FAILURE);
-    }
+    jsmntok_t tokens[2048];
 
     int ret = jsmn_parse(&parser, json, strlen(json), tokens, 2048);
 
@@ -147,7 +142,6 @@ Node *parse_json(char *json, uint16_t *surah_size){
 
     Node *surah = (Node *)malloc(sizeof(Node));
     if(surah == NULL){
-        free(tokens);
         perror("malloc");
         exit(EXIT_FAILURE);
     }
@@ -162,25 +156,27 @@ Node *parse_json(char *json, uint16_t *surah_size){
             strncpy(s, (json + tokens[i + 1].start), len);
             s[len] = '\0';
             if(flag){
-                surah->verse = strdup(s);
+                node->verse = (char*)malloc((len + 1) * sizeof(char));
+                strcpy(node->verse, s);
+                node->verse[len] = '\0';
                 flag = 0;
             } else {
                 node->next = (Node *) malloc(sizeof(Node));
                 if(node->next == NULL){
-                    free_list(surah);
-                    free(tokens);
+                    free_list(&surah);
                     perror("malloc");
                     exit(EXIT_FAILURE);
                 }
                 node = node->next;
-                node->verse = strdup(s);
+                node->verse = (char*)malloc((len + 1) * sizeof(char));
+                strcpy(node->verse, s);
+                node->verse[len] = '\0';
                 node->next = NULL;
             }
             (*surah_size)++;
             i++;
         } 
     }
-    free(tokens);
     return surah;
 }
 
@@ -201,8 +197,10 @@ int main(int argc, char **argv) {
         } else if(strcmp(argv[1], "-s") == 0){
             print_surah(surah);
         }
-        free_list(surah);
+        free_list(&surah);
+        atexit(curl_global_cleanup);
     }
+    
 
     return 0;
 }
